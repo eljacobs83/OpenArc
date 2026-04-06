@@ -245,3 +245,88 @@ def test_missing_model_queue(worker_registry: worker_module.WorkerRegistry) -> N
     with pytest.raises(ValueError):
         worker_registry._get_model_queue("missing")
 
+
+def test_infer_cancel_allows_worker_lock_progress_while_registry_lock_blocked(
+    worker_registry: worker_module.WorkerRegistry,
+) -> None:
+    class CancelableModel:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def cancel(self, request_id: str) -> None:
+            self.calls.append(request_id)
+
+    async def _run() -> None:
+        request_id = "req-lock-contention"
+        model_name = "llm-cancel"
+        model = CancelableModel()
+        record = ModelRecord(model_name=model_name, model_type=ModelType.LLM, engine="ov_genai")
+        record.model_instance = model
+
+        async with worker_registry._lock:
+            worker_registry._active_requests[request_id] = (model_name, object())
+        async with worker_registry._model_registry._lock:
+            worker_registry._model_registry._models[record.model_id] = record
+
+        entered_model_registry_lock = asyncio.Event()
+        release_model_registry_lock = asyncio.Event()
+
+        async def _hold_model_registry_lock() -> None:
+            async with worker_registry._model_registry._lock:
+                entered_model_registry_lock.set()
+                await release_model_registry_lock.wait()
+
+        holder = asyncio.create_task(_hold_model_registry_lock())
+        await entered_model_registry_lock.wait()
+
+        cancel_task = asyncio.create_task(worker_registry.infer_cancel(request_id))
+        await asyncio.sleep(0)
+
+        # If infer_cancel still held worker_registry._lock, this would time out.
+        await asyncio.wait_for(worker_registry._lock.acquire(), timeout=0.5)
+        worker_registry._lock.release()
+
+        release_model_registry_lock.set()
+        assert await asyncio.wait_for(cancel_task, timeout=1.0) is True
+        assert model.calls == [request_id]
+        await holder
+
+    asyncio.run(_run())
+
+
+def test_infer_cancel_during_load_and_unload_races(
+    worker_registry: worker_module.WorkerRegistry,
+) -> None:
+    class CancelableModel:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def cancel(self, request_id: str) -> None:
+            self.calls.append(request_id)
+
+    async def _run() -> None:
+        request_id = "req-race"
+        model_name = "llm-race"
+        record = ModelRecord(model_name=model_name, model_type=ModelType.LLM, engine="ov_genai")
+
+        async with worker_registry._lock:
+            worker_registry._active_requests[request_id] = (model_name, object())
+        async with worker_registry._model_registry._lock:
+            worker_registry._model_registry._models[record.model_id] = record
+
+        # Model is still loading (no instance available yet).
+        assert await worker_registry.infer_cancel(request_id) is False
+
+        # Model becomes loaded; cancellation succeeds.
+        model = CancelableModel()
+        async with worker_registry._model_registry._lock:
+            worker_registry._model_registry._models[record.model_id].model_instance = model
+        assert await worker_registry.infer_cancel(request_id) is True
+        assert model.calls == [request_id]
+
+        # Model is unloaded while request is still tracked; cancellation now fails safely.
+        async with worker_registry._model_registry._lock:
+            worker_registry._model_registry._models.pop(record.model_id, None)
+        assert await worker_registry.infer_cancel(request_id) is False
+
+    asyncio.run(_run())

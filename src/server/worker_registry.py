@@ -866,19 +866,18 @@ class WorkerRegistry:
             True if cancellation was triggered, False if request not found
         """
         async with self._lock:
-            if request_id in self._active_requests:
-                model_name, _ = self._active_requests[request_id]
-                
-                # Look up model instance from ModelRegistry
-                async with self._model_registry._lock:
-                    for record in self._model_registry._models.values():
-                        if record.model_name == model_name and record.model_instance is not None:
-                            model_instance = record.model_instance
-                            if hasattr(model_instance, 'cancel'):
-                                await model_instance.cancel(request_id)
-                                logger.info(f"[WorkerRegistry] Cancelled request {request_id} on model {model_name}")
-                                return True
+            active = self._active_requests.get(request_id)
+            if active is None:
+                return False
+            model_name, _ = active
+
+        model_instance = await self._model_registry.get_model_instance(model_name)
+        if model_instance is None or not hasattr(model_instance, "cancel"):
             return False
+
+        await model_instance.cancel(request_id)
+        logger.info(f"[WorkerRegistry] Cancelled request {request_id} on model {model_name}")
+        return True
 
     async def transcribe_whisper(self, model_name: str, gen_config: OVGenAI_WhisperGenConfig) -> Dict[str, Any]:
         """Transcribe audio using Whisper model."""
