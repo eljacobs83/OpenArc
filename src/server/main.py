@@ -104,7 +104,7 @@ app = FastAPI(lifespan=lifespan)
 
 # API key authentication
 API_KEY = os.getenv("OPENARC_API_KEY")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # Add request logging middleware (before CORS so it logs all requests)
 app.add_middleware(RequestLoggingMiddleware)
@@ -118,13 +118,17 @@ app.add_middleware(
     allow_headers=["*"],  
 )
 
-async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify the API key provided in the Authorization header"""
-    if credentials.credentials != API_KEY:
-        logger.error(f"Invalid API key: {credentials.credentials}")
+async def verify_api_key(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Verify the API key provided in the Authorization header when auth is enabled."""
+    if not API_KEY:
+        return None
+
+    if not credentials or credentials.credentials != API_KEY:
         raise HTTPException(
             status_code=401,
-            detail="Invalid API key",
+            detail="Unauthorized",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -225,6 +229,8 @@ async def load_model(load_config: ModelLoadConfig):
         return {"model_id": model_id, "model_name": load_config.model_name, "status": "loaded"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load model: {str(exc)}")
 
@@ -237,6 +243,8 @@ async def unload_model(unload_config: ModelUnloadConfig):
             return {"model_name": unload_config.model_name, "status": "unloading"}
         else:
             raise HTTPException(status_code=404, detail=f"Model '{unload_config.model_name}' not found")
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to unload model: {str(exc)}")
 
@@ -271,6 +279,8 @@ async def benchmark(request: OpenArcBenchRequest):
         return {"metrics": metrics}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Benchmark failed: {str(exc)}")
 
@@ -298,6 +308,8 @@ async def openai_list_models():
             "object": "list",
             "data": models
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(exc)}")
 
@@ -497,6 +509,8 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest, raw_requ
             return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(exc)}")
 
@@ -630,6 +644,8 @@ async def openai_completions(request: OpenAICompletionRequest, raw_request: Requ
             return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Completion failed: {str(exc)}")
 @app.post("/v1/audio/transcriptions", dependencies=[Depends(verify_api_key)])
@@ -664,9 +680,13 @@ async def openai_audio_transcriptions(
                 raise ValueError("openarc_asr.qwen3_asr required for Qwen3 ASR models")
             gen_config = cfg.qwen3_asr.model_copy(update={"audio_base64": audio_base64})
             result = await _workers.transcribe_qwen3_asr(model, gen_config)
-        else:
+        elif normalized_model_type == ModelType.WHISPER:
             gen_config = OVGenAI_WhisperGenConfig(audio_base64=audio_base64)
             result = await _workers.transcribe_whisper(model, gen_config)
+        else:
+            raise ValueError(
+                f"Model type {normalized_model_type.value} does not support transcription"
+            )
         metrics = result.get("metrics", {})
 
         logger.info(f"[audio/transcriptions] model={model} metrics={metrics}")
@@ -686,6 +706,8 @@ async def openai_audio_transcriptions(
 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"Transcription failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(exc)}")
@@ -743,6 +765,8 @@ async def openai_audio_speech(request: OpenAISpeechRequest):
 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Speech synthesis failed: {str(exc)}")
 
@@ -769,7 +793,16 @@ async def embeddings(request: EmbeddingsRequest):
         request_id = f"ov-{uuid.uuid4().hex[:24]}"
 
         result = await _workers.embed(model_name, tok_config)
+        if result.get("error") is not None:
+            error_message = result["error"].get("message", "Unknown embeddings inference failure")
+            raise HTTPException(status_code=500, detail=f"Embedding inference failed: {error_message}")
+
         data = result.get("data", None)
+        if not isinstance(data, list):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Embedding inference returned invalid data type: {type(data).__name__}",
+            )
         metrics = result.get("metrics", {}) or {}
 
         prompt_tokens = metrics.get("input_token", 0)
@@ -800,6 +833,8 @@ async def embeddings(request: EmbeddingsRequest):
         return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Embedding failed: {str(exc)}")
@@ -824,7 +859,16 @@ async def rerank(request: RerankRequest):
         request_id = f"ov-{uuid.uuid4().hex[:24]}"
 
         result = await _workers.rerank(model_name, rr_config)
+        if result.get("error") is not None:
+            error_message = result["error"].get("message", "Unknown reranking inference failure")
+            raise HTTPException(status_code=500, detail=f"Reranking inference failed: {error_message}")
+
         data = result.get("data", None)
+        if not isinstance(data, list):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Reranking inference returned invalid data type: {type(data).__name__}",
+            )
         metrics = result.get("metrics", {}) or {}
 
         prompt_tokens = metrics.get("input_token", 0)
@@ -853,6 +897,8 @@ async def rerank(request: RerankRequest):
         return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Reranking failed: {str(exc)}")

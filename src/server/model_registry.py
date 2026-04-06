@@ -69,6 +69,14 @@ class ModelRegistry:
     def add_on_unloaded(self, callback: Callable[[ModelRecord], Awaitable[None]]) -> None:
         self._on_unloaded.append(callback)
 
+    async def get_model_instance(self, model_name: str) -> Optional[Any]:
+        """Return the loaded model instance for model_name, if present."""
+        async with self._lock:
+            for record in self._models.values():
+                if record.model_name == model_name:
+                    return record.model_instance
+            return None
+
     async def register_load(self, loader: ModelLoadConfig) -> str:
         """Register and load a model, waiting for completion.
         
@@ -76,26 +84,24 @@ class ModelRegistry:
             ValueError: If model name already exists
             Exception: Any exception during loading is propagated to caller
         """
-        # Check if model name already exists before loading
+        # Ensure duplicate check and reservation/insertion are atomic.
         async with self._lock:
             for existing_record in self._models.values():
                 if existing_record.model_name == loader.model_name:
                     logger.info(f"Load failed! model_name '{loader.model_name}' already exists")
                     raise ValueError(f"model_name '{loader.model_name}' already registered")
-        
-        # Create a model record with LOADING status
-        record = ModelRecord(
-            model_path=loader.model_path,
-            model_name=loader.model_name,
-            model_type=loader.model_type,
-            engine=loader.engine,
-            device=loader.device,
-            runtime_config=loader.runtime_config,
-            status=ModelStatus.LOADING,
-        )
-        
-        # Register the model record immediately
-        async with self._lock:
+
+            # Reserve the model name by inserting a LOADING record before
+            # any asynchronous work starts.
+            record = ModelRecord(
+                model_path=loader.model_path,
+                model_name=loader.model_name,
+                model_type=loader.model_type,
+                engine=loader.engine,
+                device=loader.device,
+                runtime_config=loader.runtime_config,
+                status=ModelStatus.LOADING,
+            )
             self._models[record.model_id] = record
         
         # Start loading task
