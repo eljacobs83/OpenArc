@@ -12,7 +12,6 @@ from openvino_genai import (
 from transformers import AutoTokenizer
 
 from src.server.models.ov_genai import OVGenAI_GenConfig
-from src.server.model_registry import ModelRegistry
 from src.server.models.registration import ModelLoadConfig
 from src.engine.ov_genai.streamers import ChunkStreamer
 from src.server.utils.chat import flatten_messages
@@ -184,11 +183,10 @@ class OVGenAI_LLM:
             # Chat template tokenization for messages (used by /v1/chat/completions endpoint)
             prompt_token_ids = self.prepare_inputs(gen_config.messages, gen_config.tools)
 
-        # DEBUG: Log what we're about to send
-        logger.error(f"[DEBUG] draft_model_loaded: {getattr(self, 'draft_model_loaded', False)}")
-        logger.error(f"[DEBUG] self.model_num_assistant_tokens: {getattr(self, 'model_num_assistant_tokens', 'NOT SET')}")
-        logger.error(f"[DEBUG] generation_kwargs.num_assistant_tokens: {getattr(generation_kwargs, 'num_assistant_tokens', 'NOT SET')}")
-        logger.error(f"[DEBUG] generation_kwargs.assistant_confidence_threshold: {getattr(generation_kwargs, 'assistant_confidence_threshold', 'NOT SET')}")
+        logger.debug(f"draft_model_loaded: {getattr(self, 'draft_model_loaded', False)}")
+        logger.debug(f"model_num_assistant_tokens: {getattr(self, 'model_num_assistant_tokens', 'NOT SET')}")
+        logger.debug(f"generation_kwargs.num_assistant_tokens: {getattr(generation_kwargs, 'num_assistant_tokens', 'NOT SET')}")
+        logger.debug(f"generation_kwargs.assistant_confidence_threshold: {getattr(generation_kwargs, 'assistant_confidence_threshold', 'NOT SET')}")
 
         
         async def _run_generation():
@@ -328,28 +326,17 @@ class OVGenAI_LLM:
         self.encoder_tokenizer = AutoTokenizer.from_pretrained(loader.model_path)
         logging.info(f"{loader.model_name} loaded successfully")
 
-    async def unload_model(self, registry: ModelRegistry, model_name: str) -> bool:
-        """Unregister model from registry and free memory resources.
-
-        Args:
-            registry: ModelRegistry to unregister from
-            model_id: Private model identifier returned by register_load
-
-        Returns:
-            True if the model was found and unregistered, else False.
-        """
-        removed = await registry.register_unload(model_name)
-
+    async def unload_model(self) -> None:
+        """Free model memory resources. Called by ModelRegistry._unload_task."""
         if self.model is not None:
             del self.model
             self.model = None
-        
+
         if self.encoder_tokenizer is not None:
             del self.encoder_tokenizer
             self.encoder_tokenizer = None
-        
+
         gc.collect()
         logging.info(f"[{self.load_config.model_name}] unloaded successfully")
-        return removed
 
 
