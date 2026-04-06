@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest  # type: ignore[import]
 
@@ -227,7 +228,7 @@ def test_embed(worker_registry: worker_module.WorkerRegistry) -> None:
         return await _load_and_call(worker_registry, record, worker_registry.embed("emb-model", config))
 
     result = asyncio.run(_run())
-    assert result == {"data": [[0.1, 0.2]], "metrics": {"dim": 2}}
+    assert result == {"data": [[0.1, 0.2]], "metrics": {"dim": 2}, "error": None}
 
 
 def test_rerank(worker_registry: worker_module.WorkerRegistry) -> None:
@@ -238,7 +239,7 @@ def test_rerank(worker_registry: worker_module.WorkerRegistry) -> None:
         return await _load_and_call(worker_registry, record, worker_registry.rerank("rerank-model", config))
 
     result = asyncio.run(_run())
-    assert result == {"data": [{"doc": "A", "score": 0.9}], "metrics": {"total": 1}}
+    assert result == {"data": [{"doc": "A", "score": 0.9}], "metrics": {"total": 1}, "error": None}
 
 
 def test_missing_model_queue(worker_registry: worker_module.WorkerRegistry) -> None:

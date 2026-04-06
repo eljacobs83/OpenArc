@@ -75,6 +75,43 @@ def test_register_load_duplicate_name_raises(monkeypatch: pytest.MonkeyPatch) ->
     asyncio.run(_run())
 
 
+def test_register_load_duplicate_name_concurrent_only_one_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ModelRegistry()
+    load_config = _sample_load_config("concurrent-model")
+
+    async def _noop_unload(*_args, **_kwargs):
+        return None
+
+    dummy_model = SimpleNamespace(unload_model=_noop_unload)
+
+    async def fake_create(config):  # type: ignore[override]
+        await asyncio.sleep(0.05)
+        return dummy_model
+
+    monkeypatch.setattr(registry_module, "create_model_instance", fake_create)
+
+    async def _run():
+        task_a = asyncio.create_task(registry.register_load(load_config))
+        task_b = asyncio.create_task(registry.register_load(load_config))
+        results = await asyncio.gather(task_a, task_b, return_exceptions=True)
+        status = await registry.status()
+        return results, status
+
+    results, status = asyncio.run(_run())
+
+    success_count = sum(1 for result in results if isinstance(result, str))
+    errors = [result for result in results if isinstance(result, Exception)]
+
+    assert success_count == 1
+    assert len(errors) == 1
+    assert isinstance(errors[0], ValueError)
+    assert "already registered" in str(errors[0])
+    assert status["total_loaded_models"] == 1
+    assert status["models"][0]["model_name"] == load_config.model_name
+
+
 def test_register_unload_invokes_model_unload(monkeypatch: pytest.MonkeyPatch) -> None:
     registry = ModelRegistry()
     load_config = _sample_load_config()

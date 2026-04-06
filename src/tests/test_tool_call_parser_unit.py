@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Any, AsyncIterator, Dict, List
 
@@ -6,6 +7,7 @@ from fastapi.responses import StreamingResponse
 
 import src.server.main as server_main
 from src.server.models.requests_openai import OpenAIChatCompletionRequest
+from src.server.models.requests_openai import EmbeddingsRequest, RerankRequest
 
 
 class _DummyRequest:
@@ -141,3 +143,79 @@ async def test_openai_chat_completions_streaming_hermes_tool_call(monkeypatch: p
     ) == {"query": "OpenArc"}
 
     assert json_payloads[-1]["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_embeddings_returns_http_error_for_inference_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Workers:
+        async def embed(self, model_name: str, generation_config: Any) -> Dict[str, Any]:
+            return {
+                "data": None,
+                "metrics": {},
+                "error": {"type": "RuntimeError", "message": "emb failed"},
+            }
+
+    monkeypatch.setattr(server_main, "_workers", _Workers())
+    request = EmbeddingsRequest(model="demo-model", input=["hello"])
+
+    async def _run() -> None:
+        with pytest.raises(server_main.HTTPException) as exc_info:
+            await server_main.embeddings(request)
+        assert exc_info.value.status_code == 500
+        assert "Embedding inference failed: emb failed" in str(exc_info.value.detail)
+
+    asyncio.run(_run())
+
+
+def test_embeddings_rejects_non_list_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Workers:
+        async def embed(self, model_name: str, generation_config: Any) -> Dict[str, Any]:
+            return {"data": "not-a-list", "metrics": {}, "error": None}
+
+    monkeypatch.setattr(server_main, "_workers", _Workers())
+    request = EmbeddingsRequest(model="demo-model", input=["hello"])
+
+    async def _run() -> None:
+        with pytest.raises(server_main.HTTPException) as exc_info:
+            await server_main.embeddings(request)
+        assert exc_info.value.status_code == 500
+        assert "invalid data type: str" in str(exc_info.value.detail)
+
+    asyncio.run(_run())
+
+
+def test_rerank_returns_http_error_for_inference_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Workers:
+        async def rerank(self, model_name: str, generation_config: Any) -> Dict[str, Any]:
+            return {
+                "data": None,
+                "metrics": {},
+                "error": {"type": "RuntimeError", "message": "rr failed"},
+            }
+
+    monkeypatch.setattr(server_main, "_workers", _Workers())
+    request = RerankRequest(model="demo-model", query="q", documents=["d1", "d2"])
+
+    async def _run() -> None:
+        with pytest.raises(server_main.HTTPException) as exc_info:
+            await server_main.rerank(request)
+        assert exc_info.value.status_code == 500
+        assert "Reranking inference failed: rr failed" in str(exc_info.value.detail)
+
+    asyncio.run(_run())
+
+
+def test_rerank_rejects_non_list_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Workers:
+        async def rerank(self, model_name: str, generation_config: Any) -> Dict[str, Any]:
+            return {"data": {"bad": "shape"}, "metrics": {}, "error": None}
+
+    monkeypatch.setattr(server_main, "_workers", _Workers())
+    request = RerankRequest(model="demo-model", query="q", documents=["d1", "d2"])
+
+    async def _run() -> None:
+        with pytest.raises(server_main.HTTPException) as exc_info:
+            await server_main.rerank(request)
+        assert exc_info.value.status_code == 500
+        assert "invalid data type: dict" in str(exc_info.value.detail)
+
+    asyncio.run(_run())
