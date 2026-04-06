@@ -1,4 +1,5 @@
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest  # type: ignore[import]
 
@@ -245,3 +246,58 @@ def test_missing_model_queue(worker_registry: worker_module.WorkerRegistry) -> N
     with pytest.raises(ValueError):
         worker_registry._get_model_queue("missing")
 
+
+def test_queue_worker_llm_error_packet_marks_task_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _run() -> tuple[worker_module.WorkerPacket, asyncio.Queue, MagicMock]:
+        packet = worker_module.WorkerPacket(
+            request_id="req-1",
+            id_model="llm-model",
+            gen_config=OVGenAI_GenConfig(prompt="hello"),
+        )
+        packet.result_future = asyncio.get_running_loop().create_future()
+        model_queue: asyncio.Queue = asyncio.Queue()
+        await model_queue.put(packet)
+
+        async def _infer_error(p, _model):
+            p.response = "Error: boom"
+            p.metrics = None
+            return p
+
+        monkeypatch.setattr(worker_module.InferWorker, "infer_llm", _infer_error)
+        registry = MagicMock()
+        registry.register_unload = AsyncMock(return_value=True)
+
+        await worker_module.QueueWorker.queue_worker_llm("llm-model", model_queue, MagicMock(), registry)
+        await asyncio.sleep(0)
+        return packet, model_queue, registry
+
+    packet, model_queue, registry = asyncio.run(_run())
+    registry.register_unload.assert_called_once_with("llm-model")
+    assert packet.result_future.done() is False
+    assert model_queue._unfinished_tasks == 0
+
+
+def test_queue_worker_llm_exception_marks_task_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _run() -> tuple[asyncio.Queue, MagicMock]:
+        packet = worker_module.WorkerPacket(
+            request_id="req-2",
+            id_model="llm-model",
+            gen_config=OVGenAI_GenConfig(prompt="hello"),
+        )
+        model_queue: asyncio.Queue = asyncio.Queue()
+        await model_queue.put(packet)
+
+        async def _infer_raises(_packet, _model):
+            raise RuntimeError("inference exploded")
+
+        monkeypatch.setattr(worker_module.InferWorker, "infer_llm", _infer_raises)
+        registry = MagicMock()
+        registry.register_unload = AsyncMock(return_value=True)
+
+        with pytest.raises(RuntimeError, match="inference exploded"):
+            await worker_module.QueueWorker.queue_worker_llm("llm-model", model_queue, MagicMock(), registry)
+        return model_queue, registry
+
+    model_queue, registry = asyncio.run(_run())
+    registry.register_unload.assert_not_called()
+    assert model_queue._unfinished_tasks == 0
