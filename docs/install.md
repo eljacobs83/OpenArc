@@ -55,6 +55,8 @@ icon: lucide/cog
 
     3. Clone OpenArc, enter the directory and run:
     ```
+    git clone https://github.com/eljacobs83/OpenArc.git
+    cd OpenArc
     uv sync
     ```
 
