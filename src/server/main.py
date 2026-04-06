@@ -104,7 +104,7 @@ app = FastAPI(lifespan=lifespan)
 
 # API key authentication
 API_KEY = os.getenv("OPENARC_API_KEY")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # Add request logging middleware (before CORS so it logs all requests)
 app.add_middleware(RequestLoggingMiddleware)
@@ -118,13 +118,17 @@ app.add_middleware(
     allow_headers=["*"],  
 )
 
-async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify the API key provided in the Authorization header"""
-    if credentials.credentials != API_KEY:
-        logger.error(f"Invalid API key: {credentials.credentials}")
+async def verify_api_key(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Verify the API key provided in the Authorization header when auth is enabled."""
+    if not API_KEY:
+        return None
+
+    if not credentials or credentials.credentials != API_KEY:
         raise HTTPException(
             status_code=401,
-            detail="Invalid API key",
+            detail="Unauthorized",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
