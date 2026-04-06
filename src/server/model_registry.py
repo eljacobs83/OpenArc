@@ -69,6 +69,14 @@ class ModelRegistry:
     def add_on_unloaded(self, callback: Callable[[ModelRecord], Awaitable[None]]) -> None:
         self._on_unloaded.append(callback)
 
+    async def get_model_instance(self, model_name: str) -> Optional[Any]:
+        """Return the loaded model instance for model_name, if present."""
+        async with self._lock:
+            for record in self._models.values():
+                if record.model_name == model_name:
+                    return record.model_instance
+            return None
+
     async def register_load(self, loader: ModelLoadConfig) -> str:
         """Register and load a model, waiting for completion.
         

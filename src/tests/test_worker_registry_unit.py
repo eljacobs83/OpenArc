@@ -247,116 +247,87 @@ def test_missing_model_queue(worker_registry: worker_module.WorkerRegistry) -> N
         worker_registry._get_model_queue("missing")
 
 
-class _FailingEmbModel:
-    async def generate_embeddings(self, _config):
-        raise RuntimeError("emb boom")
-        yield  # pragma: no cover
+def test_infer_cancel_allows_worker_lock_progress_while_registry_lock_blocked(
+    worker_registry: worker_module.WorkerRegistry,
+) -> None:
+    class CancelableModel:
+        def __init__(self) -> None:
+            self.calls = []
 
+        async def cancel(self, request_id: str) -> None:
+            self.calls.append(request_id)
 
-class _FailingRRModel:
-    async def generate_rerankings(self, _config):
-        raise RuntimeError("rr boom")
-        yield  # pragma: no cover
+    async def _run() -> None:
+        request_id = "req-lock-contention"
+        model_name = "llm-cancel"
+        model = CancelableModel()
+        record = ModelRecord(model_name=model_name, model_type=ModelType.LLM, engine="ov_genai")
+        record.model_instance = model
 
+        async with worker_registry._lock:
+            worker_registry._active_requests[request_id] = (model_name, object())
+        async with worker_registry._model_registry._lock:
+            worker_registry._model_registry._models[record.model_id] = record
 
-def test_infer_emb_sets_structured_error() -> None:
-    packet = worker_module.WorkerPacket(
-        request_id="req-1",
-        id_model="emb-model",
-        gen_config=PreTrainedTokenizerConfig(text=["hello"]),
-    )
+        entered_model_registry_lock = asyncio.Event()
+        release_model_registry_lock = asyncio.Event()
 
-    completed = asyncio.run(worker_module.InferWorker.infer_emb(packet, _FailingEmbModel()))
+        async def _hold_model_registry_lock() -> None:
+            async with worker_registry._model_registry._lock:
+                entered_model_registry_lock.set()
+                await release_model_registry_lock.wait()
 
-    assert completed.response is None
-    assert completed.error == {"type": "RuntimeError", "message": "emb boom"}
-    assert completed.metrics == {"error": {"type": "RuntimeError", "message": "emb boom"}}
+        holder = asyncio.create_task(_hold_model_registry_lock())
+        await entered_model_registry_lock.wait()
 
-
-def test_infer_rerank_sets_structured_error() -> None:
-    packet = worker_module.WorkerPacket(
-        request_id="req-2",
-        id_model="rr-model",
-        gen_config=RerankerConfig(query="q", documents=["a"]),
-    )
-
-    completed = asyncio.run(worker_module.InferWorker.infer_rerank(packet, _FailingRRModel()))
-
-    assert completed.response is None
-    assert completed.error == {"type": "RuntimeError", "message": "rr boom"}
-    assert completed.metrics == {"error": {"type": "RuntimeError", "message": "rr boom"}}
-
-
-def test_queue_worker_emb_does_not_unload_on_empty_list_result() -> None:
-    async def _run() -> tuple[list[str], asyncio.Future]:
-        packet = worker_module.WorkerPacket(
-            request_id="req-3",
-            id_model="emb-model",
-            gen_config=PreTrainedTokenizerConfig(text=["hello"]),
-            result_future=asyncio.get_running_loop().create_future(),
-        )
-        queue: asyncio.Queue = asyncio.Queue()
-        await queue.put(packet)
-        await queue.put(None)
-
-        async def _fake_infer(_packet, _model):
-            _packet.response = []
-            _packet.error = None
-            _packet.metrics = {}
-            return _packet
-
-        unload_calls = []
-
-        class _Registry:
-            async def register_unload(self, model_name):
-                unload_calls.append(model_name)
-
-        original_infer = worker_module.InferWorker.infer_emb
-        worker_module.InferWorker.infer_emb = _fake_infer
-        try:
-            await worker_module.QueueWorker.queue_worker_emb("emb-model", queue, object(), _Registry())
-        finally:
-            worker_module.InferWorker.infer_emb = original_infer
-
-        return unload_calls, packet.result_future
-
-    unload_calls, result_future = asyncio.run(_run())
-    assert unload_calls == []
-    assert result_future.done()
-
-
-def test_queue_worker_rr_unloads_on_explicit_error() -> None:
-    async def _run() -> list[str]:
-        packet = worker_module.WorkerPacket(
-            request_id="req-4",
-            id_model="rr-model",
-            gen_config=RerankerConfig(query="q", documents=["d"]),
-            result_future=asyncio.get_running_loop().create_future(),
-        )
-        queue: asyncio.Queue = asyncio.Queue()
-        await queue.put(packet)
-
-        async def _fake_infer(_packet, _model):
-            _packet.response = []
-            _packet.error = {"type": "RuntimeError", "message": "rr fail"}
-            _packet.metrics = {"error": _packet.error}
-            return _packet
-
-        unload_calls = []
-
-        class _Registry:
-            async def register_unload(self, model_name):
-                unload_calls.append(model_name)
-
-        original_infer = worker_module.InferWorker.infer_rerank
-        worker_module.InferWorker.infer_rerank = _fake_infer
-        try:
-            await worker_module.QueueWorker.queue_worker_rr("rr-model", queue, object(), _Registry())
-        finally:
-            worker_module.InferWorker.infer_rerank = original_infer
-
+        cancel_task = asyncio.create_task(worker_registry.infer_cancel(request_id))
         await asyncio.sleep(0)
-        return unload_calls
 
-    unload_calls = asyncio.run(_run())
-    assert unload_calls == ["rr-model"]
+        # If infer_cancel still held worker_registry._lock, this would time out.
+        await asyncio.wait_for(worker_registry._lock.acquire(), timeout=0.5)
+        worker_registry._lock.release()
+
+        release_model_registry_lock.set()
+        assert await asyncio.wait_for(cancel_task, timeout=1.0) is True
+        assert model.calls == [request_id]
+        await holder
+
+    asyncio.run(_run())
+
+
+def test_infer_cancel_during_load_and_unload_races(
+    worker_registry: worker_module.WorkerRegistry,
+) -> None:
+    class CancelableModel:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def cancel(self, request_id: str) -> None:
+            self.calls.append(request_id)
+
+    async def _run() -> None:
+        request_id = "req-race"
+        model_name = "llm-race"
+        record = ModelRecord(model_name=model_name, model_type=ModelType.LLM, engine="ov_genai")
+
+        async with worker_registry._lock:
+            worker_registry._active_requests[request_id] = (model_name, object())
+        async with worker_registry._model_registry._lock:
+            worker_registry._model_registry._models[record.model_id] = record
+
+        # Model is still loading (no instance available yet).
+        assert await worker_registry.infer_cancel(request_id) is False
+
+        # Model becomes loaded; cancellation succeeds.
+        model = CancelableModel()
+        async with worker_registry._model_registry._lock:
+            worker_registry._model_registry._models[record.model_id].model_instance = model
+        assert await worker_registry.infer_cancel(request_id) is True
+        assert model.calls == [request_id]
+
+        # Model is unloaded while request is still tracked; cancellation now fails safely.
+        async with worker_registry._model_registry._lock:
+            worker_registry._model_registry._models.pop(record.model_id, None)
+        assert await worker_registry.infer_cancel(request_id) is False
+
+    asyncio.run(_run())

@@ -153,6 +153,25 @@ def test_register_unload_unknown_model_returns_false() -> None:
     assert result is False
 
 
+def test_get_model_instance_returns_loaded_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = ModelRegistry()
+    load_config = _sample_load_config()
+    dummy_model = SimpleNamespace()
+
+    async def fake_create(config):  # type: ignore[override]
+        assert config is load_config
+        return dummy_model
+
+    monkeypatch.setattr(registry_module, "create_model_instance", fake_create)
+
+    async def _run():
+        await registry.register_load(load_config)
+        return await registry.get_model_instance(load_config.model_name)
+
+    model_instance = asyncio.run(_run())
+    assert model_instance is dummy_model
+
+
 def test_create_model_instance_rejects_unknown_combination() -> None:
     load_config = ModelLoadConfig(
         model_path="/models/mock",
