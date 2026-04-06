@@ -33,32 +33,32 @@ def _make_worker(response_value, metrics_value, supports_stream: bool = False):
 @pytest.fixture
 def worker_system(monkeypatch: pytest.MonkeyPatch):
     class DummyLLM:
-        async def unload_model(self, registry, model_name):
-            return True
+        async def unload_model(self):
+            pass
 
     class DummyVLM:
-        async def unload_model(self, registry, model_name):
-            return True
+        async def unload_model(self):
+            pass
 
     class DummyWhisper:
-        async def unload_model(self, registry, model_name):
-            return True
+        async def unload_model(self):
+            pass
 
     class DummyKokoro:
-        async def unload_model(self, registry, model_name):
-            return True
+        async def unload_model(self):
+            pass
 
     class DummyQwen3ASR:
-        async def unload_model(self, registry, model_name):
-            return True
+        async def unload_model(self):
+            pass
 
     class DummyEmb:
-        async def unload_model(self, registry, model_name):
-            return True
+        async def unload_model(self):
+            pass
 
     class DummyRR:
-        async def unload_model(self, registry, model_name):
-            return True
+        async def unload_model(self):
+            pass
 
     monkeypatch.setattr(worker_module, "OVGenAI_LLM", DummyLLM)
     monkeypatch.setattr(worker_module, "OVGenAI_VLM", DummyVLM)

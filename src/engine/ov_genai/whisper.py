@@ -9,7 +9,6 @@ import librosa
 import numpy as np
 from openvino_genai import WhisperPipeline
 
-from src.server.model_registry import ModelRegistry
 from src.server.models.registration import ModelLoadConfig
 from src.server.models.ov_genai import OVGenAI_WhisperGenConfig
 
@@ -81,23 +80,12 @@ class OVGenAI_Whisper:
             **(loader.runtime_config or {})
         )
 
-    async def unload_model(self, registry: ModelRegistry, model_name: str) -> bool:
-        """Unregister model from registry and free memory resources.
-
-        Args:
-            registry: ModelRegistry to unregister from
-            model_id: Private model identifier returned by register_load
-
-        Returns:
-            True if the model was found and unregistered, else False.
-        """
-        removed = await registry.register_unload(model_name)
-
+    async def unload_model(self) -> None:
+        """Free model memory resources. Called by ModelRegistry._unload_task."""
         if self.whisper_model is not None:
             del self.whisper_model
             self.whisper_model = None
 
         gc.collect()
         logger.info(f"[{self.load_config.model_name}] weights and tokenizer unloaded and memory cleaned up")
-        return removed
 

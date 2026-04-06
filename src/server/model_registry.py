@@ -187,14 +187,7 @@ class ModelRegistry:
             
             # Call the model's unload_model method if it exists and model is loaded
             if model_instance and hasattr(model_instance, 'unload_model'):
-                unload_fn = getattr(model_instance, 'unload_model')
-                try:
-                    # Prefer (registry, model_name) signature used by OVGenAI_* classes
-                    result = unload_fn(self, record.model_name)
-                except TypeError:
-                    # Fallback to no-arg sync unload (e.g., Whisper)
-                    result = unload_fn()
-                # Await if coroutine/awaitable
+                result = model_instance.unload_model()
                 if inspect.isawaitable(result):
                     await result
             
@@ -214,7 +207,7 @@ class ModelRegistry:
                     asyncio.create_task(cb(removed_record))
                     
         except Exception as e:
-            logger.info(f"Error during model unload: {e}")
+            logger.error(f"Error during model unload: {e}", exc_info=True)
 
     async def status(self) -> dict:
         """Return registry status: total count and list of loaded models (public view)."""

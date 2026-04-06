@@ -119,8 +119,8 @@ def test_register_unload_invokes_model_unload(monkeypatch: pytest.MonkeyPatch) -
     unload_calls = []
 
     class DummyModel:
-        async def unload_model(self, reg, name):
-            unload_calls.append((reg, name))
+        async def unload_model(self):
+            unload_calls.append(True)
 
     async def fake_create(config):  # type: ignore[override]
         return DummyModel()
@@ -139,7 +139,6 @@ def test_register_unload_invokes_model_unload(monkeypatch: pytest.MonkeyPatch) -
     status = asyncio.run(_run())
 
     assert unload_calls
-    assert unload_calls[0][1] == load_config.model_name
     assert status["total_loaded_models"] == 0
 
 

@@ -17,7 +17,6 @@ from transformers import AutoTokenizer
 
 from src.server.models.ov_genai import OVGenAI_GenConfig, VLM_VISION_TOKENS
 from src.server.utils.chat import flatten_message_content
-from src.server.model_registry import ModelRegistry
 from src.server.models.registration import ModelLoadConfig
 from src.engine.ov_genai.streamers import ChunkStreamer
 
@@ -300,13 +299,10 @@ class OVGenAI_VLM:
 
         except Exception as e:
             logger.error(f"[{loader.model_name}] Failed to initialize VLMPipeline: {e}", exc_info=True)
+            raise
 
-    async def unload_model(self, registry: ModelRegistry, model_name: str) -> bool:
-        """
-        Unregister model from registry and free memory resources.
-        """
-        removed = await registry.register_unload(model_name)
-
+    async def unload_model(self) -> None:
+        """Free model memory resources. Called by ModelRegistry._unload_task."""
         if self.model_path is not None:
             del self.model_path
             self.model_path = None
@@ -314,12 +310,11 @@ class OVGenAI_VLM:
         if self.tokenizer is not None:
             del self.tokenizer
             self.tokenizer = None
-            
+
         if self.vision_token is not None:
             del self.vision_token
             self.vision_token = None
 
         gc.collect()
         logger.info(f"[{self.load_config.model_name}] unloaded successfully")
-        return removed
 

@@ -37,7 +37,6 @@ from src.engine.openvino.qwen3_asr.qwen3_asr_utils import (
 )
 
 from src.server.models.openvino import OV_Qwen3ASRGenConfig
-from src.server.model_registry import ModelRegistry
 from src.server.models.registration import EngineType, ModelLoadConfig, ModelType
 
 logger = logging.getLogger(__name__)
@@ -426,15 +425,14 @@ class OVQwen3ASR:
         yield metrics
         yield text
 
-    async def unload_model(self, registry: ModelRegistry, model_name: str) -> bool:
-        removed = await registry.register_unload(model_name)
+    async def unload_model(self) -> None:
+        """Free model memory resources. Called by ModelRegistry._unload_task."""
         self.enc_model = None
         self.emb_model = None
         self.dec_model = None
         self.dec_request = None
         gc.collect()
         logger.info(f"[{self.load_config.model_name}] unloaded and memory cleaned up")
-        return removed
 
 
 def main():

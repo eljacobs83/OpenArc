@@ -18,7 +18,6 @@ import torch
 from kokoro.model import KModel
 
 
-from src.server.model_registry import ModelRegistry
 from src.server.models.registration import ModelLoadConfig
 from src.server.models.openvino import OV_KokoroGenConfig
 
@@ -54,28 +53,13 @@ class OV_Kokoro(KModel):
         self.model = core.compile_model(self.model_path / "openvino_model.xml", self._device)
         return self.model
 
-    async def unload_model(self, registry: ModelRegistry, model_name: str) -> bool:
-        """Unregister model from registry and free memory resources.
-
-        Args:
-            registry: ModelRegistry to unregister from
-            model_name: Model identifier to unload
-
-        Returns:
-            True if the model was found and unregistered, else False.
-        """
-        # Clean up model resources
+    async def unload_model(self) -> None:
+        """Free model memory resources. Called by ModelRegistry._unload_task."""
         if self.model is not None:
             del self.model
             self.model = None
-        
-        # Unregister from registry
-        removed = await registry.register_unload(model_name)
-        
-        # Force garbage collection to free memory
+
         gc.collect()
-        
-        return removed
 
 
     def make_chunks(self, text: str, chunk_size: int) -> list[str]:

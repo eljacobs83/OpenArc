@@ -15,9 +15,8 @@ class _DummyModel:
     def load_model(self, load_config: ModelLoadConfig) -> None:
         self.loaded = True
 
-    async def unload_model(self, registry, model_name: str) -> bool:
+    async def unload_model(self) -> None:
         self.unloaded = True
-        return True
 
 
 @pytest.fixture

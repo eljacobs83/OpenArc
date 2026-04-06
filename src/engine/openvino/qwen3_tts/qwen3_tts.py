@@ -45,7 +45,6 @@ from src.engine.openvino.qwen3_tts.qwen3_tts_helpers import (
     _REF_TEXT_TMPL,
     _SYNTH_TMPL,
 )
-from src.server.model_registry import ModelRegistry
 from src.server.models.openvino import OV_Qwen3TTSGenConfig
 from src.server.models.registration import EngineType, ModelLoadConfig, ModelType
 
@@ -159,8 +158,8 @@ class OVQwen3TTS:
             f"model_type={load_config.model_type.value}"
         )
 
-    async def unload_model(self, registry: ModelRegistry, model_name: str) -> bool:
-        removed = await registry.register_unload(model_name)
+    async def unload_model(self) -> None:
+        """Free model memory resources. Called by ModelRegistry._unload_task."""
         self._text_model_c = None
         self._codec_emb_c = None
         self._cp_codec_emb_c = None
@@ -177,8 +176,7 @@ class OVQwen3TTS:
         self._cp_sin = None
         self._loaded = False
         gc.collect()
-        logger.info(f"[{model_name}] unloaded and memory cleaned up")
-        return removed
+        logger.info(f"[{self.load_config.model_name}] unloaded and memory cleaned up")
 
     @property
     def loaded(self) -> bool:

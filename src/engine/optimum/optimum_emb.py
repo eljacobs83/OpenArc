@@ -16,7 +16,6 @@ from src.server.models.optimum import PreTrainedTokenizerConfig
 
 from typing import Any, AsyncIterator, Dict
 
-from src.server.model_registry import ModelRegistry
 from src.server.models.registration import ModelLoadConfig
 
 
@@ -88,26 +87,15 @@ class Optimum_EMB:
         self.tokenizer = AutoTokenizer.from_pretrained(loader.model_path)
         logging.info(f"Model loaded successfully: {loader.model_name}")
 
-    async def unload_model(self, registry: ModelRegistry, model_name: str) -> bool:
-        """Unregister model from registry and free memory resources.
-
-        Args:
-            registry: ModelRegistry to unregister from
-            model_id: Private model identifier returned by register_load
-
-        Returns:
-            True if the model was found and unregistered, else False.
-        """
-        removed = await registry.register_unload(model_name)
-
+    async def unload_model(self) -> None:
+        """Free model memory resources. Called by ModelRegistry._unload_task."""
         if self.model is not None:
             del self.model
             self.model = None
-        
+
         if self.tokenizer is not None:
             del self.tokenizer
             self.tokenizer = None
-        
+
         gc.collect()
         logging.info(f"[{self.load_config.model_name}] weights and tokenizer unloaded and memory cleaned up")
-        return removed
