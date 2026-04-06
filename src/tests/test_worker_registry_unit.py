@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest  # type: ignore[import]
 
@@ -245,3 +246,142 @@ def test_missing_model_queue(worker_registry: worker_module.WorkerRegistry) -> N
     with pytest.raises(ValueError):
         worker_registry._get_model_queue("missing")
 
+
+def test_infer_emb_empty_output_marks_success() -> None:
+    class DummyEmb:
+        async def generate_embeddings(self, _config):
+            yield []
+            yield {"dim": 0}
+
+    packet = worker_module.WorkerPacket(
+        request_id="req-emb-empty",
+        id_model="emb",
+        gen_config=PreTrainedTokenizerConfig(text=[]),
+    )
+
+    result = asyncio.run(worker_module.InferWorker.infer_emb(packet, DummyEmb()))
+    assert result.response == []
+    assert result.error is None
+    assert result.metrics == {"dim": 0}
+
+
+def test_infer_rerank_empty_output_marks_success() -> None:
+    class DummyRR:
+        async def generate_rerankings(self, _config):
+            yield []
+            yield {"total": 0}
+
+    packet = worker_module.WorkerPacket(
+        request_id="req-rr-empty",
+        id_model="rr",
+        gen_config=RerankerConfig(query="q", documents=[]),
+    )
+
+    result = asyncio.run(worker_module.InferWorker.infer_rerank(packet, DummyRR()))
+    assert result.response == []
+    assert result.error is None
+    assert result.metrics == {"total": 0}
+
+
+def test_queue_worker_emb_empty_output_does_not_unload(monkeypatch: pytest.MonkeyPatch) -> None:
+    unload_calls = []
+
+    async def _fake_infer(packet, _model):
+        packet.response = []
+        packet.metrics = {"dim": 0}
+        packet.error = None
+        return packet
+
+    async def _run():
+        result_future = asyncio.get_running_loop().create_future()
+        packet = worker_module.WorkerPacket(
+            request_id="req-emb-worker-empty",
+            id_model="emb",
+            gen_config=PreTrainedTokenizerConfig(text=[]),
+            result_future=result_future,
+        )
+        model_queue: asyncio.Queue = asyncio.Queue()
+        registry = SimpleNamespace(
+            register_unload=lambda model_name: unload_calls.append(model_name) or asyncio.sleep(0)
+        )
+
+        monkeypatch.setattr(worker_module.InferWorker, "infer_emb", _fake_infer)
+        task = asyncio.create_task(
+            worker_module.QueueWorker.queue_worker_emb("emb-model", model_queue, object(), registry)
+        )
+        await model_queue.put(packet)
+        await model_queue.put(None)
+        completed = await asyncio.wait_for(result_future, timeout=1)
+        await asyncio.wait_for(task, timeout=1)
+        return completed
+
+    completed_packet = asyncio.run(_run())
+    assert completed_packet.response == []
+    assert unload_calls == []
+
+
+def test_queue_worker_rr_empty_output_does_not_unload(monkeypatch: pytest.MonkeyPatch) -> None:
+    unload_calls = []
+
+    async def _fake_infer(packet, _model):
+        packet.response = []
+        packet.metrics = {"total": 0}
+        packet.error = None
+        return packet
+
+    async def _run():
+        result_future = asyncio.get_running_loop().create_future()
+        packet = worker_module.WorkerPacket(
+            request_id="req-rr-worker-empty",
+            id_model="rr",
+            gen_config=RerankerConfig(query="q", documents=[]),
+            result_future=result_future,
+        )
+        model_queue: asyncio.Queue = asyncio.Queue()
+        registry = SimpleNamespace(
+            register_unload=lambda model_name: unload_calls.append(model_name) or asyncio.sleep(0)
+        )
+
+        monkeypatch.setattr(worker_module.InferWorker, "infer_rerank", _fake_infer)
+        task = asyncio.create_task(
+            worker_module.QueueWorker.queue_worker_rr("rr-model", model_queue, object(), registry)
+        )
+        await model_queue.put(packet)
+        await model_queue.put(None)
+        completed = await asyncio.wait_for(result_future, timeout=1)
+        await asyncio.wait_for(task, timeout=1)
+        return completed
+
+    completed_packet = asyncio.run(_run())
+    assert completed_packet.response == []
+    assert unload_calls == []
+
+
+def test_queue_worker_emb_unloads_on_explicit_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    unload_calls = []
+
+    async def _fake_infer(packet, _model):
+        packet.response = ""
+        packet.metrics = None
+        packet.error = "boom"
+        return packet
+
+    async def _run():
+        packet = worker_module.WorkerPacket(
+            request_id="req-emb-worker-error",
+            id_model="emb",
+            gen_config=PreTrainedTokenizerConfig(text=["x"]),
+        )
+        model_queue: asyncio.Queue = asyncio.Queue()
+        registry = SimpleNamespace(
+            register_unload=lambda model_name: unload_calls.append(model_name) or asyncio.sleep(0)
+        )
+        monkeypatch.setattr(worker_module.InferWorker, "infer_emb", _fake_infer)
+        task = asyncio.create_task(
+            worker_module.QueueWorker.queue_worker_emb("emb-model", model_queue, object(), registry)
+        )
+        await model_queue.put(packet)
+        await asyncio.wait_for(task, timeout=1)
+
+    asyncio.run(_run())
+    assert unload_calls == ["emb-model"]
