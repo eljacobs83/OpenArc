@@ -64,8 +64,9 @@ class WorkerPacket:
         OV_Qwen3TTSGenConfig,
         PreTrainedTokenizerConfig,
     ]
-    response: Optional[str] = None
+    response: Optional[Any] = None
     metrics: Optional[Dict[str, Any]] = None
+    error: Optional[Dict[str, Any]] = None
     # Orchestration plumbing
     result_future: Optional[asyncio.Future] = None
     stream_queue: Optional[asyncio.Queue] = None
@@ -317,16 +318,14 @@ class InferWorker:
 
             packet.response = final_data
             packet.metrics = metrics
+            packet.error = None
             
         except Exception as e:
             # Log the full exception with traceback
             logger.error("EMB inference failed!", exc_info=True)
-            # Store error in packet response
-            packet.response = f"Error: {str(e)}"
-            packet.metrics = None
-            # Signal error to stream if streaming
-            if packet.gen_config.stream and packet.stream_queue is not None:
-                await packet.stream_queue.put(None)
+            packet.response = None
+            packet.metrics = {"error": {"type": e.__class__.__name__, "message": str(e)}}
+            packet.error = {"type": e.__class__.__name__, "message": str(e)}
                 
         return packet
 
@@ -345,16 +344,14 @@ class InferWorker:
 
             packet.response = final_data
             packet.metrics = metrics
+            packet.error = None
             
         except Exception as e:
             # Log the full exception with traceback
             logger.error("Reranking failed!", exc_info=True)
-            # Store error in packet response
-            packet.response = f"Error: {str(e)}"
-            packet.metrics = None
-            # Signal error to stream if streaming
-            if packet.gen_config.stream and packet.stream_queue is not None:
-                await packet.stream_queue.put(None)
+            packet.response = None
+            packet.metrics = {"error": {"type": e.__class__.__name__, "message": str(e)}}
+            packet.error = {"type": e.__class__.__name__, "message": str(e)}
                 
         return packet
     
@@ -936,19 +933,18 @@ class WorkerRegistry:
             True if cancellation was triggered, False if request not found
         """
         async with self._lock:
-            if request_id in self._active_requests:
-                model_name, _ = self._active_requests[request_id]
-                
-                # Look up model instance from ModelRegistry
-                async with self._model_registry._lock:
-                    for record in self._model_registry._models.values():
-                        if record.model_name == model_name and record.model_instance is not None:
-                            model_instance = record.model_instance
-                            if hasattr(model_instance, 'cancel'):
-                                await model_instance.cancel(request_id)
-                                logger.info(f"[WorkerRegistry] Cancelled request {request_id} on model {model_name}")
-                                return True
+            active = self._active_requests.get(request_id)
+            if active is None:
+                return False
+            model_name, _ = active
+
+        model_instance = await self._model_registry.get_model_instance(model_name)
+        if model_instance is None or not hasattr(model_instance, "cancel"):
             return False
+
+        await model_instance.cancel(request_id)
+        logger.info(f"[WorkerRegistry] Cancelled request {request_id} on model {model_name}")
+        return True
 
     async def transcribe_whisper(self, model_name: str, gen_config: OVGenAI_WhisperGenConfig) -> Dict[str, Any]:
         """Transcribe audio using Whisper model."""
@@ -1052,7 +1048,7 @@ class WorkerRegistry:
         q = self._get_emb_queue(model_name)
         await q.put(packet)
         completed = await result_future
-        return {"data": completed.response, "metrics": completed.metrics or {}}
+        return {"data": completed.response, "metrics": completed.metrics or {}, "error": completed.error}
     
     async def rerank(self, model_name: str, rr_config: RerankerConfig) -> Dict[str, Any]:
         """Rerank documents."""
