@@ -229,6 +229,8 @@ async def load_model(load_config: ModelLoadConfig):
         return {"model_id": model_id, "model_name": load_config.model_name, "status": "loaded"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load model: {str(exc)}")
 
@@ -241,6 +243,8 @@ async def unload_model(unload_config: ModelUnloadConfig):
             return {"model_name": unload_config.model_name, "status": "unloading"}
         else:
             raise HTTPException(status_code=404, detail=f"Model '{unload_config.model_name}' not found")
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to unload model: {str(exc)}")
 
@@ -275,6 +279,8 @@ async def benchmark(request: OpenArcBenchRequest):
         return {"metrics": metrics}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Benchmark failed: {str(exc)}")
 
@@ -302,6 +308,8 @@ async def openai_list_models():
             "object": "list",
             "data": models
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to list models: {str(exc)}")
 
@@ -501,6 +509,8 @@ async def openai_chat_completions(request: OpenAIChatCompletionRequest, raw_requ
             return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(exc)}")
 
@@ -634,6 +644,8 @@ async def openai_completions(request: OpenAICompletionRequest, raw_request: Requ
             return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Completion failed: {str(exc)}")
 @app.post("/v1/audio/transcriptions", dependencies=[Depends(verify_api_key)])
@@ -694,6 +706,8 @@ async def openai_audio_transcriptions(
 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"Transcription failed: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(exc)}")
@@ -751,6 +765,8 @@ async def openai_audio_speech(request: OpenAISpeechRequest):
 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Speech synthesis failed: {str(exc)}")
 
