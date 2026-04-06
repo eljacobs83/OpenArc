@@ -14,6 +14,10 @@ RUN apt-get update && apt-get install -y \
     git \
     gpg \
     gpg-agent \
+    libdrm2 \
+    libnuma1 \
+    libudev1 \
+    ocl-icd-libopencl1 \
     wget \
     python3 \
     python3-venv \
@@ -30,8 +34,10 @@ RUN wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | \
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu noble client" | \
     tee /etc/apt/sources.list.d/intel-gpu-noble.list && \
     apt-get update && apt-get install -y \
+    clinfo \
     intel-opencl-icd \
     intel-level-zero-gpu \
+    libze1 \
     level-zero \
     level-zero-dev && \
     rm -rf /var/lib/apt/lists/*
@@ -60,11 +66,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
 # ============================================================================
-# Clone and setup OpenArc
+# Copy and setup OpenArc
 # ============================================================================
 WORKDIR /app
-RUN git clone https://github.com/SearchSavior/OpenArc.git . && \
-    echo "OpenARC version: $(git describe --tags --always)"
+COPY . /app
+RUN echo "OpenARC version: $(git describe --tags --always || echo 'local-checkout')"
 
 # ============================================================================
 # Install Python dependencies with uv
@@ -123,6 +129,11 @@ echo "=== Runtime Configuration ==="
 echo "Port: 8000"
 echo "API Key: ${OPENARC_API_KEY:0:10}..."
 echo "Auto-load Model: ${OPENARC_AUTOLOAD_MODEL:-none}"
+echo "OpenVINO devices: $(python3 -c 'from openvino import Core; print(Core().available_devices)' 2>/tmp/ov_device_err.log || cat /tmp/ov_device_err.log)"
+echo "OpenCL ICDs:"
+ls -1 /etc/OpenCL/vendors 2>/dev/null || echo "(none)"
+echo "/dev/dri:"
+ls -l /dev/dri 2>/dev/null || echo "(missing)"
 echo ""
 echo "================================================"
 
