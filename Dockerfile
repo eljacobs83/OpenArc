@@ -45,7 +45,8 @@ RUN wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | \
     test -f /usr/lib/x86_64-linux-gnu/intel-opencl/libigdrcl.so && \
     ldd /usr/lib/x86_64-linux-gnu/intel-opencl/libigdrcl.so | tee /tmp/ldd-igdrcl.txt && \
     ! grep -qi "not found" /tmp/ldd-igdrcl.txt && \
-    OCL_ICD_DEBUG=7 clinfo >/tmp/clinfo.log 2>&1 || true && \
+    OCL_ICD_DEBUG=7 clinfo >/tmp/clinfo.log 2>&1 && \
+    grep -q "Platform Name" /tmp/clinfo.log && \
     rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
