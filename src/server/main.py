@@ -104,7 +104,7 @@ app = FastAPI(lifespan=lifespan)
 
 # API key authentication
 API_KEY = os.getenv("OPENARC_API_KEY")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # Add request logging middleware (before CORS so it logs all requests)
 app.add_middleware(RequestLoggingMiddleware)
@@ -118,13 +118,17 @@ app.add_middleware(
     allow_headers=["*"],  
 )
 
-async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify the API key provided in the Authorization header"""
-    if credentials.credentials != API_KEY:
-        logger.error(f"Invalid API key: {credentials.credentials}")
+async def verify_api_key(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    """Verify the API key provided in the Authorization header when auth is enabled."""
+    if not API_KEY:
+        return None
+
+    if not credentials or credentials.credentials != API_KEY:
         raise HTTPException(
             status_code=401,
-            detail="Invalid API key",
+            detail="Unauthorized",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -664,9 +668,13 @@ async def openai_audio_transcriptions(
                 raise ValueError("openarc_asr.qwen3_asr required for Qwen3 ASR models")
             gen_config = cfg.qwen3_asr.model_copy(update={"audio_base64": audio_base64})
             result = await _workers.transcribe_qwen3_asr(model, gen_config)
-        else:
+        elif normalized_model_type == ModelType.WHISPER:
             gen_config = OVGenAI_WhisperGenConfig(audio_base64=audio_base64)
             result = await _workers.transcribe_whisper(model, gen_config)
+        else:
+            raise ValueError(
+                f"Model type {normalized_model_type.value} does not support transcription"
+            )
         metrics = result.get("metrics", {})
 
         logger.info(f"[audio/transcriptions] model={model} metrics={metrics}")
