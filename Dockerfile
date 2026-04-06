@@ -40,24 +40,22 @@ RUN wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | \
     libze1 \
     level-zero \
     level-zero-dev && \
+    ldconfig && \
+    test -s /etc/OpenCL/vendors/intel.icd && \
+    test -f /usr/lib/x86_64-linux-gnu/intel-opencl/libigdrcl.so && \
+    ldd /usr/lib/x86_64-linux-gnu/intel-opencl/libigdrcl.so | tee /tmp/ldd-igdrcl.txt && \
+    ! grep -qi "not found" /tmp/ldd-igdrcl.txt && \
+    OCL_ICD_DEBUG=7 clinfo >/tmp/clinfo.log 2>&1 && \
+    grep -q "Platform Name" /tmp/clinfo.log && \
     rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
 # Intel NPU Driver
 # ============================================================================
-RUN apt-get update && apt-get install -y \
-    cmake \
-    build-essential \
-    libudev-dev && \
-    git clone https://github.com/intel/linux-npu-driver.git /tmp/npu-driver && \
-    cd /tmp/npu-driver && \
-    git submodule update --init --recursive && \
-    mkdir build && cd build && \
-    cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local .. && \
-    make -j$(nproc) && \
-    make install && \
-    ldconfig && \
-    cd / && rm -rf /tmp/npu-driver /var/lib/apt/lists/*
+# NOTE:
+# Keep NPU runtime out of the default image to avoid /usr/local linker-path
+# collisions with Intel GPU OpenCL/Level Zero userspace.
+# Build/install the NPU stack in a dedicated image when needed.
 
 # ============================================================================
 # Install uv package manager
