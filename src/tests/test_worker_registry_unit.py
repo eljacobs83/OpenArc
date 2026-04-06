@@ -245,3 +245,64 @@ def test_missing_model_queue(worker_registry: worker_module.WorkerRegistry) -> N
     with pytest.raises(ValueError):
         worker_registry._get_model_queue("missing")
 
+
+def test_infer_cancel_concurrent_load_unload(worker_registry: worker_module.WorkerRegistry) -> None:
+    class CancelAwareModel:
+        def __init__(self):
+            self.cancelled: list[str] = []
+
+        async def cancel(self, request_id: str) -> None:
+            await asyncio.sleep(0)
+            self.cancelled.append(request_id)
+
+    async def _run() -> None:
+        model_name = "cancel-model"
+        record = ModelRecord(
+            model_path="/models/mock",
+            model_name=model_name,
+            model_type=ModelType.LLM,
+            engine="ov_genai",
+            device="CPU",
+        )
+        model = CancelAwareModel()
+        record.model_instance = model
+
+        async with worker_registry._model_registry._lock:
+            worker_registry._model_registry._models[record.model_id] = record
+
+        cancelled: set[str] = set()
+
+        for idx in range(20):
+            request_id = f"req-{idx}"
+            async with worker_registry._lock:
+                worker_registry._active_requests[request_id] = (
+                    model_name,
+                    worker_module.WorkerPacket(
+                        request_id=request_id,
+                        id_model=model_name,
+                        gen_config=OVGenAI_GenConfig(prompt="cancel", request_id=request_id),
+                    ),
+                )
+
+            if idx % 2 == 0:
+                await worker_registry._on_model_loaded(record)
+            else:
+                await worker_registry._on_model_unloaded(record)
+
+            cancel_task = asyncio.create_task(worker_registry.infer_cancel(request_id))
+            if idx % 3 == 0:
+                await worker_registry._on_model_unloaded(record)
+            else:
+                await worker_registry._on_model_loaded(record)
+
+            cancel_result = await cancel_task
+            if cancel_result:
+                cancelled.add(request_id)
+
+            async with worker_registry._lock:
+                worker_registry._active_requests.pop(request_id, None)
+
+        assert set(model.cancelled) == cancelled
+        assert len(cancelled) > 0
+
+    asyncio.run(_run())

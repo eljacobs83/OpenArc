@@ -220,6 +220,14 @@ class ModelRegistry:
                 "openai_model_names": [record.model_name for record in self._models.values()],
             }
 
+    async def get_model_instance(self, model_name: str) -> Optional[Any]:
+        """Return loaded model instance by model_name, if present."""
+        async with self._lock:
+            for record in self._models.values():
+                if record.model_name == model_name and record.model_instance is not None:
+                    return record.model_instance
+        return None
+
 # Registry mapping (engine, model_type) to model class paths
 MODEL_CLASS_REGISTRY = {
     (EngineType.OV_GENAI, ModelType.LLM): "src.engine.ov_genai.llm.OVGenAI_LLM",
