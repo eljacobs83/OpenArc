@@ -9,6 +9,9 @@ services:
     # GPU access
     devices:
       - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:-993}"
+      - "${VIDEO_GID:-44}"
     
     # Volumes
     volumes:
@@ -23,6 +26,8 @@ services:
     environment:
       - OPENARC_API_KEY=${OPENARC_API_KEY:-openarc-default-key}
       - OPENARC_AUTOLOAD_MODEL=${OPENARC_AUTOLOAD_MODEL:-}
+      - MODEL_PATH=/models
+      - OPENARC_CONFIG_PATH=/persist/openarc_config.json
       # Intel GPU tuning variables
       - NEOReadDebugKeys=1
       - OverrideGpuAddressSpace=48
