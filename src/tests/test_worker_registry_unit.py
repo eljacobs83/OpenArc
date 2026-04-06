@@ -227,7 +227,7 @@ def test_embed(worker_registry: worker_module.WorkerRegistry) -> None:
         return await _load_and_call(worker_registry, record, worker_registry.embed("emb-model", config))
 
     result = asyncio.run(_run())
-    assert result == {"data": [[0.1, 0.2]], "metrics": {"dim": 2}}
+    assert result == {"data": [[0.1, 0.2]], "metrics": {"dim": 2}, "error": None}
 
 
 def test_rerank(worker_registry: worker_module.WorkerRegistry) -> None:
@@ -238,10 +238,124 @@ def test_rerank(worker_registry: worker_module.WorkerRegistry) -> None:
         return await _load_and_call(worker_registry, record, worker_registry.rerank("rerank-model", config))
 
     result = asyncio.run(_run())
-    assert result == {"data": [{"doc": "A", "score": 0.9}], "metrics": {"total": 1}}
+    assert result == {"data": [{"doc": "A", "score": 0.9}], "metrics": {"total": 1}, "error": None}
 
 
 def test_missing_model_queue(worker_registry: worker_module.WorkerRegistry) -> None:
     with pytest.raises(ValueError):
         worker_registry._get_model_queue("missing")
 
+
+class _FailingEmbModel:
+    async def generate_embeddings(self, _config):
+        raise RuntimeError("emb boom")
+        yield  # pragma: no cover
+
+
+class _FailingRRModel:
+    async def generate_rerankings(self, _config):
+        raise RuntimeError("rr boom")
+        yield  # pragma: no cover
+
+
+def test_infer_emb_sets_structured_error() -> None:
+    packet = worker_module.WorkerPacket(
+        request_id="req-1",
+        id_model="emb-model",
+        gen_config=PreTrainedTokenizerConfig(text=["hello"]),
+    )
+
+    completed = asyncio.run(worker_module.InferWorker.infer_emb(packet, _FailingEmbModel()))
+
+    assert completed.response is None
+    assert completed.error == {"type": "RuntimeError", "message": "emb boom"}
+    assert completed.metrics == {"error": {"type": "RuntimeError", "message": "emb boom"}}
+
+
+def test_infer_rerank_sets_structured_error() -> None:
+    packet = worker_module.WorkerPacket(
+        request_id="req-2",
+        id_model="rr-model",
+        gen_config=RerankerConfig(query="q", documents=["a"]),
+    )
+
+    completed = asyncio.run(worker_module.InferWorker.infer_rerank(packet, _FailingRRModel()))
+
+    assert completed.response is None
+    assert completed.error == {"type": "RuntimeError", "message": "rr boom"}
+    assert completed.metrics == {"error": {"type": "RuntimeError", "message": "rr boom"}}
+
+
+def test_queue_worker_emb_does_not_unload_on_empty_list_result() -> None:
+    async def _run() -> tuple[list[str], asyncio.Future]:
+        packet = worker_module.WorkerPacket(
+            request_id="req-3",
+            id_model="emb-model",
+            gen_config=PreTrainedTokenizerConfig(text=["hello"]),
+            result_future=asyncio.get_running_loop().create_future(),
+        )
+        queue: asyncio.Queue = asyncio.Queue()
+        await queue.put(packet)
+        await queue.put(None)
+
+        async def _fake_infer(_packet, _model):
+            _packet.response = []
+            _packet.error = None
+            _packet.metrics = {}
+            return _packet
+
+        unload_calls = []
+
+        class _Registry:
+            async def register_unload(self, model_name):
+                unload_calls.append(model_name)
+
+        original_infer = worker_module.InferWorker.infer_emb
+        worker_module.InferWorker.infer_emb = _fake_infer
+        try:
+            await worker_module.QueueWorker.queue_worker_emb("emb-model", queue, object(), _Registry())
+        finally:
+            worker_module.InferWorker.infer_emb = original_infer
+
+        return unload_calls, packet.result_future
+
+    unload_calls, result_future = asyncio.run(_run())
+    assert unload_calls == []
+    assert result_future.done()
+
+
+def test_queue_worker_rr_unloads_on_explicit_error() -> None:
+    async def _run() -> list[str]:
+        packet = worker_module.WorkerPacket(
+            request_id="req-4",
+            id_model="rr-model",
+            gen_config=RerankerConfig(query="q", documents=["d"]),
+            result_future=asyncio.get_running_loop().create_future(),
+        )
+        queue: asyncio.Queue = asyncio.Queue()
+        await queue.put(packet)
+
+        async def _fake_infer(_packet, _model):
+            _packet.response = []
+            _packet.error = {"type": "RuntimeError", "message": "rr fail"}
+            _packet.metrics = {"error": _packet.error}
+            return _packet
+
+        unload_calls = []
+
+        class _Registry:
+            async def register_unload(self, model_name):
+                unload_calls.append(model_name)
+
+        original_infer = worker_module.InferWorker.infer_rerank
+        worker_module.InferWorker.infer_rerank = _fake_infer
+        try:
+            await worker_module.QueueWorker.queue_worker_rr("rr-model", queue, object(), _Registry())
+        finally:
+            worker_module.InferWorker.infer_rerank = original_infer
+
+        await asyncio.sleep(0)
+        return unload_calls
+
+    unload_calls = asyncio.run(_run())
+    assert unload_calls == ["rr-model"]

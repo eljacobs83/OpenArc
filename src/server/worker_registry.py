@@ -64,8 +64,9 @@ class WorkerPacket:
         OV_Qwen3TTSGenConfig,
         PreTrainedTokenizerConfig,
     ]
-    response: Optional[str] = None
+    response: Optional[Any] = None
     metrics: Optional[Dict[str, Any]] = None
+    error: Optional[Dict[str, Any]] = None
     # Orchestration plumbing
     result_future: Optional[asyncio.Future] = None
     stream_queue: Optional[asyncio.Queue] = None
@@ -317,16 +318,14 @@ class InferWorker:
 
             packet.response = final_data
             packet.metrics = metrics
+            packet.error = None
             
         except Exception as e:
             # Log the full exception with traceback
             logger.error("EMB inference failed!", exc_info=True)
-            # Store error in packet response
-            packet.response = f"Error: {str(e)}"
-            packet.metrics = None
-            # Signal error to stream if streaming
-            if packet.gen_config.stream and packet.stream_queue is not None:
-                await packet.stream_queue.put(None)
+            packet.response = None
+            packet.metrics = {"error": {"type": e.__class__.__name__, "message": str(e)}}
+            packet.error = {"type": e.__class__.__name__, "message": str(e)}
                 
         return packet
 
@@ -345,16 +344,14 @@ class InferWorker:
 
             packet.response = final_data
             packet.metrics = metrics
+            packet.error = None
             
         except Exception as e:
             # Log the full exception with traceback
             logger.error("Reranking failed!", exc_info=True)
-            # Store error in packet response
-            packet.response = f"Error: {str(e)}"
-            packet.metrics = None
-            # Signal error to stream if streaming
-            if packet.gen_config.stream and packet.stream_queue is not None:
-                await packet.stream_queue.put(None)
+            packet.response = None
+            packet.metrics = {"error": {"type": e.__class__.__name__, "message": str(e)}}
+            packet.error = {"type": e.__class__.__name__, "message": str(e)}
                 
         return packet
     
@@ -534,7 +531,7 @@ class QueueWorker:
 
             completed_packet = await InferWorker.infer_emb(packet, emb_model)
             # Check if inference failed and trigger model unload
-            if not completed_packet.response:
+            if completed_packet.error is not None:
                 logger.error(f"[EMB Worker: {model_name}] Inference failed, triggering model unload...")
                 asyncio.create_task(registry.register_unload(model_name))
                 break
@@ -556,7 +553,7 @@ class QueueWorker:
 
             completed_packet = await InferWorker.infer_rerank(packet, rr_model)
             # Check if inference failed and trigger model unload
-            if not completed_packet.response:
+            if completed_packet.error is not None:
                 logger.error(f"[Reranker Worker: {model_name}] Inference failed, triggering model unload...")
                 asyncio.create_task(registry.register_unload(model_name))
                 break
@@ -982,7 +979,7 @@ class WorkerRegistry:
         q = self._get_emb_queue(model_name)
         await q.put(packet)
         completed = await result_future
-        return {"data": completed.response, "metrics": completed.metrics or {}}
+        return {"data": completed.response, "metrics": completed.metrics or {}, "error": completed.error}
     
     async def rerank(self, model_name: str, rr_config: RerankerConfig) -> Dict[str, Any]:
         """Rerank documents."""
@@ -997,4 +994,4 @@ class WorkerRegistry:
         q = self._get_rerank_queue(model_name)
         await q.put(packet)
         completed = await result_future
-        return {"data": completed.response, "metrics": completed.metrics or {}}
+        return {"data": completed.response, "metrics": completed.metrics or {}, "error": completed.error}

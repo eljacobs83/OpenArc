@@ -769,7 +769,16 @@ async def embeddings(request: EmbeddingsRequest):
         request_id = f"ov-{uuid.uuid4().hex[:24]}"
 
         result = await _workers.embed(model_name, tok_config)
+        if result.get("error") is not None:
+            error_message = result["error"].get("message", "Unknown embeddings inference failure")
+            raise HTTPException(status_code=500, detail=f"Embedding inference failed: {error_message}")
+
         data = result.get("data", None)
+        if not isinstance(data, list):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Embedding inference returned invalid data type: {type(data).__name__}",
+            )
         metrics = result.get("metrics", {}) or {}
 
         prompt_tokens = metrics.get("input_token", 0)
@@ -800,6 +809,8 @@ async def embeddings(request: EmbeddingsRequest):
         return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Embedding failed: {str(exc)}")
@@ -824,7 +835,16 @@ async def rerank(request: RerankRequest):
         request_id = f"ov-{uuid.uuid4().hex[:24]}"
 
         result = await _workers.rerank(model_name, rr_config)
+        if result.get("error") is not None:
+            error_message = result["error"].get("message", "Unknown reranking inference failure")
+            raise HTTPException(status_code=500, detail=f"Reranking inference failed: {error_message}")
+
         data = result.get("data", None)
+        if not isinstance(data, list):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Reranking inference returned invalid data type: {type(data).__name__}",
+            )
         metrics = result.get("metrics", {}) or {}
 
         prompt_tokens = metrics.get("input_token", 0)
@@ -853,6 +873,8 @@ async def rerank(request: RerankRequest):
         return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Reranking failed: {str(exc)}")
