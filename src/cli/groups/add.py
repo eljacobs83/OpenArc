@@ -2,11 +2,63 @@
 Add command - Add a model configuration to the config file.
 """
 import json
+from typing import Any
 
 import click
 
 from ..main import cli, console
 from ..utils import validate_model_path
+
+
+def _coerce_runtime_value(value: str) -> Any:
+    """Coerce runtime config value from string when possible."""
+    cleaned = value.strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return cleaned
+
+
+def parse_runtime_config(runtime_config: str | None) -> dict[str, Any]:
+    """Parse runtime config from JSON or KEY=VALUE pairs.
+
+    Accepted formats:
+    - JSON object: '{"MODEL_DISTRIBUTION_POLICY": "PIPELINE_PARALLEL"}'
+    - Comma-separated key/value pairs: 'MODEL_DISTRIBUTION_POLICY=PIPELINE_PARALLEL,NUM_STREAMS=2'
+    """
+    if not runtime_config:
+        return {}
+
+    raw = runtime_config.strip()
+    if not raw:
+        return {}
+
+    # JSON is still the preferred format
+    if raw.startswith("{"):
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"runtime_config must be a JSON object (dictionary), got {type(parsed).__name__}"
+            )
+        return parsed
+
+    # Fallback parser for shell-friendly KEY=VALUE pairs
+    parsed: dict[str, Any] = {}
+    for item in raw.split(","):
+        token = item.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise ValueError(
+                "runtime_config key/value format must use KEY=VALUE pairs separated by commas"
+            )
+        key, value = token.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError("runtime_config contains an empty key")
+        parsed[key] = _coerce_runtime_value(value)
+
+    return parsed
 
 
 @cli.command()
@@ -33,7 +85,12 @@ from ..utils import validate_model_path
     help='Device(s) to load the model on.')
 @click.option("--runtime-config", "--rtc",
     default=None,
-    help='OpenVINO runtime configuration as JSON string (e.g., \'{"MODEL_DISTRIBUTION_POLICY": "PIPELINE_PARALLEL"}\').')
+    help=(
+        'OpenVINO runtime configuration as JSON string '
+        '(e.g., \'{"MODEL_DISTRIBUTION_POLICY": "PIPELINE_PARALLEL"}\') '
+        'or KEY=VALUE pairs '
+        '(e.g., MODEL_DISTRIBUTION_POLICY=PIPELINE_PARALLEL,NUM_STREAMS=2).'
+    ))
 @click.option('--vlm-type', '--vt',
     type=click.Choice(['internvl2', 'llava15', 'llavanext', 'minicpmv26', 'phi3vision', 'phi4mm', 'qwen2vl', 'qwen25vl', 'gemma3']),
     required=False,
@@ -67,18 +124,13 @@ def add(ctx, model_path, model_name, engine, model_type, device, runtime_config,
         ctx.exit(1)
     
     # Parse runtime_config if provided
-    parsed_runtime_config = {}
-    if runtime_config:
-        try:
-            parsed_runtime_config = json.loads(runtime_config)
-            if not isinstance(parsed_runtime_config, dict):
-                console.print(f"[red]Error: runtime_config must be a JSON object (dictionary), got {type(parsed_runtime_config).__name__}[/red]")
-                console.print('[yellow]Example format: \'{"MODEL_DISTRIBUTION_POLICY": "PIPELINE_PARALLEL"}\'[/yellow]')
-                ctx.exit(1)
-        except json.JSONDecodeError as e:
-            console.print(f"[red]Error parsing runtime_config JSON:[/red] {e}")
-            console.print('[yellow]Example format: \'{"MODEL_DISTRIBUTION_POLICY": "PIPELINE_PARALLEL"}\'[/yellow]')
-            ctx.exit(1)
+    try:
+        parsed_runtime_config = parse_runtime_config(runtime_config)
+    except (json.JSONDecodeError, ValueError) as e:
+        console.print(f"[red]Error parsing runtime_config:[/red] {e}")
+        console.print('[yellow]JSON example: \'{"MODEL_DISTRIBUTION_POLICY": "PIPELINE_PARALLEL"}\'[/yellow]')
+        console.print('[yellow]KEY=VALUE example: MODEL_DISTRIBUTION_POLICY=PIPELINE_PARALLEL,NUM_STREAMS=2[/yellow]')
+        ctx.exit(1)
     
     # Build and save configuration
     load_config = {

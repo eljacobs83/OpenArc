@@ -335,7 +335,13 @@ This page contains example commands to help you choose models and configure Open
               --engine ovgenai \
               --model-type llm \
               --device HETERO:GPU.0,GPU.1 \
-              --runtime-config "{"MODEL_DISTRIBUTION_POLICY": "PIPELINE_PARALLEL"}"
+              --runtime-config MODEL_DISTRIBUTION_POLICY=PIPELINE_PARALLEL
+            ```
+
+            Equivalent JSON form:
+
+            ```
+            --runtime-config '{"MODEL_DISTRIBUTION_POLICY": "PIPELINE_PARALLEL"}'
             ```
 
         === "Tensor Parallel"
@@ -349,7 +355,7 @@ This page contains example commands to help you choose models and configure Open
               --engine ovgenai \
               --model-type llm \
               --device CPU \
-              --runtime-config "{"MODEL_DISTRIBUTION_POLICY": "TENSOR_PARALLEL"}"
+              --runtime-config MODEL_DISTRIBUTION_POLICY=TENSOR_PARALLEL
             ```
 
         === "Hybrid / CPU Offload"
@@ -361,7 +367,7 @@ This page contains example commands to help you choose models and configure Open
               --engine ovgenai \
               --model-type llm \
               --device HETERO:GPU.0,CPU \
-              --runtime-config "{"MODEL_DISTRIBUTION_POLICY": "PIPELINE_PARALLEL"}"
+              --runtime-config MODEL_DISTRIBUTION_POLICY=PIPELINE_PARALLEL
             ```
 
         === "Speculative Decoding"
