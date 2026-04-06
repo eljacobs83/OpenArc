@@ -245,3 +245,75 @@ def test_missing_model_queue(worker_registry: worker_module.WorkerRegistry) -> N
     with pytest.raises(ValueError):
         worker_registry._get_model_queue("missing")
 
+
+@pytest.mark.parametrize(
+    ("infer_method_name", "worker_method_name", "config"),
+    [
+        ("infer_llm", "queue_worker_llm", OVGenAI_GenConfig(prompt="boom")),
+        ("infer_vlm", "queue_worker_vlm", OVGenAI_GenConfig(prompt="boom")),
+        ("infer_whisper", "queue_worker_whisper", OVGenAI_WhisperGenConfig(audio_base64="AAA")),
+        ("infer_qwen3_asr", "queue_worker_qwen3_asr", OV_Qwen3ASRGenConfig(audio_base64="AAA")),
+        (
+            "infer_kokoro",
+            "queue_worker_kokoro",
+            OV_KokoroGenConfig(
+                input="boom",
+                voice=KokoroVoice.AF_SARAH,
+                lang_code=KokoroLanguage.AMERICAN_ENGLISH,
+                speed=1.0,
+                character_count_chunk=50,
+                response_format="wav",
+            ),
+        ),
+        ("infer_qwen3_tts", "queue_worker_qwen3_tts", object()),
+        ("infer_emb", "queue_worker_emb", PreTrainedTokenizerConfig(text=["boom"])),
+        ("infer_rerank", "queue_worker_rr", RerankerConfig(query="boom", documents=["a"])),
+    ],
+)
+def test_queue_workers_complete_future_and_trigger_unload_on_inference_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    infer_method_name: str,
+    worker_method_name: str,
+    config,
+) -> None:
+    unload_event = asyncio.Event()
+    unload_calls: list[str] = []
+    sentinel = object()
+
+    class DummyRegistry:
+        async def register_unload(self, model_name: str) -> None:
+            unload_calls.append(model_name)
+            unload_event.set()
+
+    async def _raise_infer(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(worker_module.InferWorker, infer_method_name, _raise_infer)
+
+    async def _run() -> None:
+        model_queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        packet = worker_module.WorkerPacket(
+            request_id="req-1",
+            id_model="model-1",
+            gen_config=config,
+            result_future=loop.create_future(),
+        )
+        await model_queue.put(packet)
+
+        worker_fn = getattr(worker_module.QueueWorker, worker_method_name)
+        worker_task = asyncio.create_task(worker_fn("model-1", model_queue, sentinel, DummyRegistry()))
+
+        completed_packet = await asyncio.wait_for(packet.result_future, timeout=1.0)
+        await asyncio.wait_for(unload_event.wait(), timeout=1.0)
+        await asyncio.wait_for(model_queue.join(), timeout=1.0)
+        await asyncio.wait_for(worker_task, timeout=1.0)
+
+        assert completed_packet is packet
+        assert completed_packet.metrics is not None
+        assert "error" in completed_packet.metrics
+        assert unload_calls == ["model-1"]
+        assert model_queue.qsize() == 0
+        assert model_queue._unfinished_tasks == 0
+
+    asyncio.run(_run())
